@@ -66,6 +66,11 @@
 #define CONSOLE_ROWS_HEIGHT 12.0
 #define MAX_OUT_BUFFER_ROWS 9
 
+const char *commandsList[] = { "set", "trigger", "quit", "help"};
+const char *commandsHelp[]  = { "Set properties.", "Trigger feeds on/off.", "Exit KinectCLI.", "Display this message."};
+
+
+
 typedef struct console_info{
   int Sensitivity;
   int Rgb;
@@ -129,6 +134,7 @@ void appendDouble(char **output, double f); //Take a guess
 void pushToOutBuffer (char *M, ...);
 
 void timeToQuit();
+void displayHelp();
 
 int depth;
 char *display_name;
@@ -187,6 +193,13 @@ int DrawGLSceneY = 480;
 int ReSizeGLSceneY = 480;
 int gl_threadfunY1 = 480;
 int gl_threadfunY2 = 480;
+
+void displayHelp(){
+  size_t i = 0;
+  for ( i = 0; i < sizeof(commandsList) / sizeof(commandsList[0]); i++){
+    pushToOutBuffer("%s : %s", commandsList[i], commandsHelp[i]);
+  }
+}
 
 void timeToQuit(){
   pushToOutBuffer ("Time to quit. Have a good night.");
@@ -564,6 +577,10 @@ void processCmd(){
 
   else if (strcmp(sections[0], "quit") == 0){
     timeToQuit();
+  }
+
+  else if (strcmp(sections[0], "help") == 0){
+    displayHelp();
   }
 
   else {

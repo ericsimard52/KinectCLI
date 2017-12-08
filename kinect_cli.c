@@ -128,6 +128,8 @@ void appendDouble(char **output, double f); //Take a guess
  */
 void pushToOutBuffer (char *M, ...);
 
+void timeToQuit();
+
 int depth;
 char *display_name;
 
@@ -185,6 +187,20 @@ int DrawGLSceneY = 480;
 int ReSizeGLSceneY = 480;
 int gl_threadfunY1 = 480;
 int gl_threadfunY2 = 480;
+
+void timeToQuit(){
+  pushToOutBuffer ("Time to quit. Have a good night.");
+  debug ("Time to quit.");
+  // This hangs if no stream are open, for now, lets just make sure we have 1 open.
+  if (con.Depth == 1 && con.Rgb == 1)
+    triggerFeed(RGB); //RGB is faster to trigger then depth
+  die = 1;
+
+  pthread_join(freenect_thread, NULL);
+  glutDestroyWindow(window);
+  pthread_exit(NULL);
+
+}
 
 void appendChar (char **output, char c){
   char *tmpOutput = NULL;
@@ -546,6 +562,10 @@ void processCmd(){
     }
   }
 
+  else if (strcmp(sections[0], "quit") == 0){
+    timeToQuit();
+  }
+
   else {
     pushToOutBuffer ("Invalid command: set, trigger");
   }
@@ -735,15 +755,7 @@ void keyPressed(unsigned char key, int x, int y)
   switch(key) {
   case 27: //ESC
     debug ("Quitting on ESC key.");
-    pushToOutBuffer ("I Quit!!");
-    // This hangs if no stream are open, for now, lets just make sure we have 1 open.
-    if (con.Depth == 1 && con.Rgb == 1)
-      triggerFeed(RGB); //RGB is faster to trigger then depth
-    die = 1;
-
-    pthread_join(freenect_thread, NULL);
-    glutDestroyWindow(window);
-    pthread_exit(NULL);
+    timeToQuit();
     break;
 
   case 8: //backspace

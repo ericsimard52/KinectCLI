@@ -17,3 +17,6 @@ Working command:
 - set led {off, red, green, yellow, blink green, blink red}
 - set angle {int}
 - trigger {rgb, depth}
+
+You can find me gitconnected: https://gitconnected.com/ericsimard52<br/>
+Join us on Slack: https://gitconnected.slack.com/#Kinectcli

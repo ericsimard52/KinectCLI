@@ -26,115 +26,7 @@
  * This file has been additionally modified by: Tim Flaman
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <ncurses.h>
-#include <libfreenect.h>
-#include <stdarg.h>
-
-#include <assert.h>
-#include <X11/Xlib.h>
-#include <X11/Xatom.h>
-#include <X11/extensions/XTest.h>
-
-#include <pthread.h>
-
-#include <GL/freeglut.h>
-#include <GL/gl.h>
-#include <GL/glu.h>
-
-#include <math.h>
-
-#include "dbg.h" // Debug macros
-
-#define SCREEN (DefaultScreen(display))
-
-// Defines frame size for the camera
-#define FREENECT_FRAME_W 640
-#define FREENECT_FRAME_H 480
-#define FREENECT_FRAME_PIX (FREENECT_FRAME_H*FREENECT_FRAME_W)
-
-// Defines frame size for the IR cam
-#define FREENECT_IR_FRAME_W 640
-#define FREENECT_IR_FRAME_H 480
-#define FREENECT_IR_FRAME_PIX (FREENECT_IR_FRAME_H*FREENECT_IR_FRAME_W)
-
-#define FREENECT_VIDEO_RGB_SIZE (FREENECT_FRAME_PIX*3)
-
-#define CONSOLE_MAX_ROWS 10
-#define CONSOLE_ROWS_HEIGHT 12.0
-#define MAX_OUT_BUFFER_ROWS 9
-
-const char *commandsList[] = { "set", "trigger", "quit", "help"};
-const char *commandsHelp[]  = { "Set properties.", "Trigger feeds on/off.", "Exit KinectCLI.", "Display this message."};
-
-
-
-typedef struct console_info{
-  int Sensitivity;
-  int Rgb;
-  int Depth;
-  freenect_led_options LED;
-  int Angle;
-  int DepthFrameX1, DepthFrameX2, DepthFrameY1, DepthFrameY2, RgbFrameX1, RgbFrameX2, RgbFrameY1, RgbFrameY2;
-
-  // input / output
-  char *Buf;
-  char conIn[1000];
-  size_t len;
-  char *OutBuf[MAX_OUT_BUFFER_ROWS];
-
-  // Rows position
-  int Rows[CONSOLE_MAX_ROWS];
-} console;
-
-typedef enum FEEDS{
-  DEPTH,
-  RGB
-} FEED;
-
-typedef enum LOGLEVEL{
-  INFO,
-  DEBUG
-} LEVEL;
-
-void renderString(float x, float y, int r, int g, int b, void *font, const char* string);
-void renderInt(float x, float y, int r, int g, int b, void *font, int val);
-void updateConsole();
-void initConsole(float screenh);
-void processCmd();
-int triggerFeed(FEED f);
-
-// Function definition for OutBuf management.
-
-/*
-  appendChar is called when we encounter one of the {c,d,f,s} but we do not have a % before.
- */
-void appendChar(char **output, char c);
-
-/*
-  appendArgChar is called when we encounter %c and also called in a loop when getting %s.
-  The difference with appendChar is that appendChar will add c to the end of output
-  appendArgChar need to add c at position - 1 because the previous char was % and was copied to output buffer.
- */
-void appendArgChar(char **output, char c);
-
-void appendInt(char **output, int d); //Called when managing int
-void appendDouble(char **output, double f); //Take a guess
-
-// there is no appendString... this section is managed withing pushToOutBuffer, we use appendArgChar and appendChar to manage %s
-
-/*
-  This is the function that will be called to add an output message to outputBuffer.
-  It takes the same format as printf (%c, %d, %s, %f)
-  It passes through each element and call appropriate function.
-  Once completed it shifts each element in outputBuffer and add the new one at the end.
- */
-void pushToOutBuffer (char *M, ...);
-
-void timeToQuit();
-void displayHelp();
+#include "kinect_cli.h"
 
 int depth;
 char *display_name;
@@ -187,12 +79,397 @@ int got_frames = 0;
 uint16_t t_gamma[2048];
 
 console con;
+MYKINECT myKinect;
+
+// List of commands and help message
+const char *commandsList[] = { "set",
+                               "trigger",
+                               "quit",
+                               "listKinectAttribute",
+                               "open",
+                               "close",
+                               "scan",
+                               "listSupportedSubDevices",
+                               "listSelectedSubDevices",
+                               "selectSubDevices",
+                               "help"};
+
+const char *commandsHelp[]  = { "Set properties.",
+                                "Trigger feeds on/off.",
+                                "Exit KinectCLI.",
+                                "Get and display Kinect Serial #.",
+                                "Open selected subdevices, all by default.",
+                                "Close all opensubdevices.",
+                                "Scan for connected Kinect.",
+                                "List supported subDevices by libFreenect.",
+                                "List subdevices that will be activated by next open call.",
+                                "Choose which subdevices will be activated by next open call. Angle -> 1 Camera -> 2 Audio -> 3",
+                                "Display this message."};
+
 
 // This need to be better understood and fixed.
 int DrawGLSceneY = 480;
 int ReSizeGLSceneY = 480;
 int gl_threadfunY1 = 480;
 int gl_threadfunY2 = 480;
+
+void listSelectedSubDevices(){
+  if (myKinect.kinect_selected_devices_count == -1){
+    pushToOutBuffer ("Getting selected Subdevices.");
+    int res;
+    res = freenect_enabled_subdevices(f_ctx);
+
+    // FREENECT_DEVICE_MOTOR = 1
+    // FREENECT_DEVICE_CAMERA = 2
+    // FREENECT_DEVICE_AUDIO = 4
+    switch (res){
+    case 1:
+      myKinect.kinect_selected_devices[1] = FREENECT_DEVICE_MOTOR;
+      myKinect.kinect_selected_devices_count = 1;
+      break;
+
+    case 2:
+      myKinect.kinect_selected_devices[1] = FREENECT_DEVICE_CAMERA;
+      myKinect.kinect_selected_devices_count = 1;
+      break;
+
+    case 4:
+      myKinect.kinect_selected_devices[1] = FREENECT_DEVICE_AUDIO;
+      myKinect.kinect_selected_devices_count = 1;
+      break;
+
+    case 3:
+      ;
+      freenect_device_flags tmpArray3[3] = {FREENECT_DEVICE_MOTOR, FREENECT_DEVICE_CAMERA};
+      memcpy(myKinect.kinect_selected_devices, tmpArray3, sizeof(tmpArray3));
+      myKinect.kinect_selected_devices_count = 2;
+      break;
+
+    case 5:
+      ;
+      freenect_device_flags tmpArray5[3] = {FREENECT_DEVICE_AUDIO, FREENECT_DEVICE_MOTOR};
+      memcpy(myKinect.kinect_selected_devices, tmpArray5, sizeof(tmpArray5));
+      myKinect.kinect_selected_devices_count = 2;
+      break;
+
+    case 6:
+      ;
+      freenect_device_flags tmpArray6[3] = {FREENECT_DEVICE_AUDIO, FREENECT_DEVICE_CAMERA};
+      memcpy(myKinect.kinect_selected_devices, tmpArray6, sizeof(tmpArray6));
+      myKinect.kinect_selected_devices_count = 2;
+      break;
+
+    case 7:
+      ;
+      freenect_device_flags tmpArray7[3] = {FREENECT_DEVICE_AUDIO, FREENECT_DEVICE_CAMERA, FREENECT_DEVICE_MOTOR};
+      memcpy(myKinect.kinect_selected_devices, tmpArray7, sizeof(tmpArray7));
+      myKinect.kinect_selected_devices_count = 3;
+      break;
+
+    default:
+      pushToOutBuffer ("Unknown results from selected subdevices: %d", res);
+      debug ("Unknown results from selected subdevices: %d", res);
+    }
+  }
+
+  int i;
+  for ( i = 0; i < myKinect.kinect_selected_devices_count; i++){
+    switch (myKinect.kinect_selected_devices[i]){
+    case FREENECT_DEVICE_MOTOR:
+      pushToOutBuffer ("Angle Motor is selected.");
+      break;
+    case FREENECT_DEVICE_CAMERA:
+      pushToOutBuffer ("Camera is selected.");
+      break;
+    case FREENECT_DEVICE_AUDIO:
+      pushToOutBuffer ("Audio is selected.");
+      break;
+
+    default:
+      pushToOutBuffer ("I should not be printing this.");
+    }
+  }
+  return;
+
+ error:
+  debug ("%s", USER_ERR_MSG);
+  pushToOutBuffer (USER_ERR_MSG);
+  free (USER_ERR_MSG);
+}
+
+void selectSubDevices(int subDevs){
+  pushToOutBuffer ("selecting Subdevices.");
+  // FREENECT_DEVICE_MOTOR = 1
+  // FREENECT_DEVICE_CAMERA = 2
+  // FREENECT_DEVICE_AUDIO = 4
+  myKinect.kinect_selected_devices_flag = subDevs;
+
+  switch (subDevs){
+  case 1:
+    myKinect.kinect_selected_devices[0] = FREENECT_DEVICE_MOTOR;
+    myKinect.kinect_selected_devices_count = 1;
+    break;
+
+  case 2:
+    myKinect.kinect_selected_devices[0] = FREENECT_DEVICE_CAMERA;
+    myKinect.kinect_selected_devices_count = 1;
+    break;
+
+  case 4:
+    myKinect.kinect_selected_devices[0] = FREENECT_DEVICE_AUDIO;
+    myKinect.kinect_selected_devices_count = 1;
+    break;
+
+  case 3:
+    ;
+    freenect_device_flags tmpArray3[2] = {FREENECT_DEVICE_CAMERA, FREENECT_DEVICE_MOTOR};
+    memcpy(myKinect.kinect_selected_devices, tmpArray3, sizeof(tmpArray3));
+    myKinect.kinect_selected_devices_count = 2;
+    break;
+
+  case 5:
+    ;
+    freenect_device_flags tmpArray5[2] = {FREENECT_DEVICE_AUDIO, FREENECT_DEVICE_MOTOR};
+    memcpy(myKinect.kinect_selected_devices, tmpArray5, sizeof(tmpArray5));
+    myKinect.kinect_selected_devices_count = 2;
+    break;
+
+  case 6:
+    ;
+    freenect_device_flags tmpArray6[2] = {FREENECT_DEVICE_AUDIO, FREENECT_DEVICE_CAMERA};
+    memcpy(myKinect.kinect_selected_devices, tmpArray6, sizeof(tmpArray6));
+    myKinect.kinect_selected_devices_count = 2;
+    break;
+
+  case 7:
+    ;
+    freenect_device_flags tmpArray7[3] = {FREENECT_DEVICE_AUDIO, FREENECT_DEVICE_CAMERA, FREENECT_DEVICE_MOTOR};
+    memcpy(myKinect.kinect_selected_devices, tmpArray7, sizeof(tmpArray7));
+    myKinect.kinect_selected_devices_count = 3;
+    break;
+
+  default:
+    debug ("Unknown sub devices flag: %d", subDevs);
+    check (1 == 2, "Sub Devices flags: 1(Motor), 2(Camera), 3, 4(Audio), 5, 6, 7");
+  }
+  freenect_select_subdevices(f_ctx, subDevs);
+
+  int i;
+  pushToOutBuffer ("The following subdevices are not selected :");
+  for ( i = 0; i < myKinect.kinect_selected_devices_count; i++){
+    switch (myKinect.kinect_selected_devices[i]){
+    case FREENECT_DEVICE_MOTOR:
+      pushToOutBuffer ("Angle Motor.");
+      break;
+  case FREENECT_DEVICE_CAMERA:
+      pushToOutBuffer ("Camera.");
+      break;
+  case FREENECT_DEVICE_AUDIO:
+      pushToOutBuffer ("Audio.");
+      break;
+
+    default:
+      pushToOutBuffer ("I should not be printing this.");
+    }
+  }
+  pushToOutBuffer("Note: Only selected subdevices will be activated by the next open call");
+  return;
+
+ error:
+  debug ("%s", USER_ERR_MSG);
+  pushToOutBuffer (USER_ERR_MSG);
+  free (USER_ERR_MSG);
+}
+
+void listSupportedSubDevices(){
+  pushToOutBuffer ("Getting Subdevices.");
+  int res;
+  res = freenect_supported_subdevices();
+  // FREENECT_DEVICE_MOTOR = 1
+  // FREENECT_DEVICE_CAMERA = 2
+  // FREENECT_DEVICE_AUDIO = 4
+  switch (res){
+  case 1:
+    myKinect.kinect_supported_devices[0] = FREENECT_DEVICE_MOTOR;
+    myKinect.kinect_supported_devices_count = 1;
+    break;
+
+  case 2:
+    myKinect.kinect_supported_devices[0] = FREENECT_DEVICE_CAMERA;
+    myKinect.kinect_supported_devices_count = 1;
+    break;
+
+  case 4:
+    myKinect.kinect_supported_devices[0] = FREENECT_DEVICE_AUDIO;
+    myKinect.kinect_supported_devices_count = 1;
+    break;
+
+  case 3:
+    ;
+    freenect_device_flags tmpArray3[2] = {FREENECT_DEVICE_CAMERA, FREENECT_DEVICE_MOTOR};
+    memcpy(myKinect.kinect_supported_devices, tmpArray3, sizeof(tmpArray3));
+    myKinect.kinect_supported_devices_count = 2;
+    break;
+
+  case 5:
+    ;
+    freenect_device_flags tmpArray5[2] = {FREENECT_DEVICE_AUDIO, FREENECT_DEVICE_MOTOR};
+    memcpy(myKinect.kinect_supported_devices, tmpArray5, sizeof(tmpArray5));
+    myKinect.kinect_supported_devices_count = 2;
+    break;
+
+  case 6:
+    ;
+    freenect_device_flags tmpArray6[2] = {FREENECT_DEVICE_AUDIO, FREENECT_DEVICE_CAMERA};
+    memcpy(myKinect.kinect_supported_devices, tmpArray6, sizeof(tmpArray6));
+    myKinect.kinect_supported_devices_count = 2;
+    break;
+
+  case 7:
+    ;
+    freenect_device_flags tmpArray7[3] = {FREENECT_DEVICE_AUDIO, FREENECT_DEVICE_CAMERA, FREENECT_DEVICE_MOTOR};
+    memcpy(myKinect.kinect_supported_devices, tmpArray7, sizeof(tmpArray7));
+    myKinect.kinect_supported_devices_count = 3;
+    break;
+
+  default:
+    pushToOutBuffer ("Unknown results from supported subdevices: %d", res);
+    debug ("Unknown results from supported subdevices: %d", res);
+  }
+
+  int i;
+  for ( i = 0; i < myKinect.kinect_supported_devices_count; i++){
+    switch (myKinect.kinect_supported_devices[i]){
+    case FREENECT_DEVICE_MOTOR:
+      pushToOutBuffer ("Angle Motor is supported.");
+      break;
+    case FREENECT_DEVICE_CAMERA:
+      pushToOutBuffer ("Camera is supported.");
+      break;
+    case FREENECT_DEVICE_AUDIO:
+      pushToOutBuffer ("Audio is supported.");
+      break;
+
+    default:
+      pushToOutBuffer ("I should not be printing this.");
+    }
+  }
+  return;
+
+ error:
+  debug ("%s", USER_ERR_MSG);
+  pushToOutBuffer (USER_ERR_MSG);
+  free (USER_ERR_MSG);
+}
+
+void listKinectAttribute(){
+    pushToOutBuffer ("Getting attributes.");
+    if (myKinect.nr_devices < 1)
+      scan();
+
+    check (myKinect.nr_devices > 0 , "I do not see any Kinect.");
+    check (freenect_list_device_attributes(f_ctx, &myKinect.kinect_attributes) == myKinect.nr_devices, "Error in getting Kinect attributes.");
+    pushToOutBuffer ("Kinect serial: %s", myKinect.kinect_attributes->camera_serial);
+    myKinect.kinect_serial = myKinect.kinect_attributes->camera_serial;
+//    freenect_free_device_attributes(&myKinect.kinect_attributes); //this caused seg fault.
+    return;
+
+   error:
+    debug ("%s", USER_ERR_MSG);
+    pushToOutBuffer (USER_ERR_MSG);
+    free (USER_ERR_MSG);
+  }
+
+void closeKinect(){
+  if (myKinect.kinect_is_open == 0){
+    pushToOutBuffer("Shutting Down Streams...");
+    // This hangs if no stream are open, for now, lets just make sure we have 1 open.
+    if (con.Depth == 1 && con.Rgb == 1)
+      triggerFeed(RGB); //RGB is faster to trigger then depth
+
+    if (con.Depth == 0){
+      pushToOutBuffer("Stopping depth stream.");
+      triggerFeed(DEPTH);
+    }
+    if (con.Rgb == 0){
+      pushToOutBuffer("Stopping rgb stream.");
+      triggerFeed(RGB);
+    }
+
+    pushToOutBuffer("Closing device.");
+    check (freenect_close_device(f_dev) == 0 , "Error closing device");
+    myKinect.kinect_is_open = 1;
+    myKinect.kinect_selected_devices_count = -1;
+    return;
+
+  error:
+    pushToOutBuffer (USER_ERR_MSG);
+    free (USER_ERR_MSG);
+  }
+  else{
+    pushToOutBuffer ("Kinect is not open.");
+  }
+}
+
+void openKinect(){
+  if (myKinect.kinect_is_open == 1){
+    int res;
+    pushToOutBuffer ("Opening Device.");
+    // Should open_device use nr_devices? No, won't work, maybe with multiple Kinect it would be nr_devices - 1
+    check (freenect_open_device(f_ctx, &f_dev, myKinect.user_device_number) >= 0, "Could not locate Kinect");
+    myKinect.kinect_is_open = 0;
+    pushToOutBuffer ("Starting Thread.");
+    res = pthread_create(&freenect_thread, NULL, freenect_threadfunc, NULL);
+    check (!res, "Could not create thread.");
+  }
+  else{
+    pushToOutBuffer ("Kinect is open.");
+  }
+  return;
+
+ error:
+  pushToOutBuffer (USER_ERR_MSG);
+  free (USER_ERR_MSG);
+  if (myKinect.kinect_is_open == 0)
+    closeKinect();
+}
+
+void scan(){
+    pushToOutBuffer ("Scannning for devices.");
+    /* 
+       I am confused here, we set nr_devices but we do not use it...
+    */
+    myKinect.nr_devices = freenect_num_devices (f_ctx);
+    pushToOutBuffer ("Number of Devices Found: %d", myKinect.nr_devices);
+
+    myKinect.user_device_number = 0;
+/*    if (argc > 1)
+      user_device_number = atoi(argv[1]);
+*/
+    check (myKinect.nr_devices >= 1, "No Kinect found.");
+
+    return;
+
+   error:
+    pushToOutBuffer (USER_ERR_MSG);
+    free (USER_ERR_MSG);
+
+  }
+
+void initFreenect(){
+  debug ("Initializing freenect.");
+  check (myKinect.freenect_is_init == 1, "Freenect already initialized.");
+  check(freenect_init(&f_ctx, NULL) == 0,"freenect_init failed.");
+  myKinect.freenect_is_init = 0;
+  debug ("Freenect init is good.");
+
+  debug ("Set freenect log level %d", FREENECT_LOG_DEBUG);
+  freenect_set_log_level(f_ctx, FREENECT_LOG_DEBUG);
+
+ error:
+  debug ("%s", USER_ERR_MSG);
+  free (USER_ERR_MSG);
+}
 
 void displayHelp(){
   size_t i = 0;
@@ -202,16 +479,35 @@ void displayHelp(){
 }
 
 void timeToQuit(){
+  if (myKinect.kinect_is_open == 0){
+    debug ("Kinect is open, closing.");
+    closeKinect();
+  }
+
+  if (myKinect.freenect_is_init == 0){
+    debug ("Shutting down freenect.");
+    check (freenect_shutdown(f_ctx) == 0, "Error shutting down freenect.");
+  }
+
   pushToOutBuffer ("Time to quit. Have a good night.");
   debug ("Time to quit.");
-  // This hangs if no stream are open, for now, lets just make sure we have 1 open.
-  if (con.Depth == 1 && con.Rgb == 1)
-    triggerFeed(RGB); //RGB is faster to trigger then depth
   die = 1;
 
   pthread_join(freenect_thread, NULL);
   glutDestroyWindow(window);
   pthread_exit(NULL);
+  return;
+
+ error:
+  debug ("%s",USER_ERR_MSG);
+  free (USER_ERR_MSG);
+  debug ("Attempting to continue normally.");
+  die = 1;
+
+  pthread_join(freenect_thread, NULL);
+  glutDestroyWindow(window);
+  pthread_exit(NULL);
+  return;
 
 }
 
@@ -304,7 +600,7 @@ void appendInt(char **output, int d){
   tmpOutputLen = strlen(tmpOutput);
 
   if (*output != NULL) free (*output);
-  *output = malloc(tmpOutputLen);
+  *output = malloc(tmpOutputLen + 1);
   check_mem(*output);
   memcpy(*output,tmpOutput, tmpOutputLen);
 
@@ -575,6 +871,9 @@ void processCmd(){
     }
   }
 
+  else if (strcmp(sections[0], "listKinectAttribute") == 0){
+    listKinectAttribute();
+  }
   else if (strcmp(sections[0], "quit") == 0){
     timeToQuit();
   }
@@ -582,6 +881,32 @@ void processCmd(){
   else if (strcmp(sections[0], "help") == 0){
     displayHelp();
   }
+
+  else if (strcmp(sections[0], "scan") == 0){
+    scan();
+  }
+
+  else if (strcmp(sections[0], "open") == 0){
+    openKinect();
+  }
+
+  else if (strcmp(sections[0], "close") == 0){
+    closeKinect();
+  }
+
+  else if (strcmp(sections[0], "listSupportedSubDevices") == 0){
+    listSupportedSubDevices();
+  }
+
+  else if (strcmp(sections[0], "listSelectedSubDevices") == 0){
+    listSelectedSubDevices();
+  }
+
+  else if (strcmp(sections[0], "selectSubDevices") == 0){
+    int flag = atoi(sections[1]);
+    selectSubDevices(flag);
+  }
+
 
   else {
     pushToOutBuffer ("Invalid command: set, trigger");
@@ -640,9 +965,10 @@ int triggerFeed (FEED f){
  error:
   pushToOutBuffer (USER_ERR_MSG);
   free (USER_ERR_MSG);
+  return 1;
 }
 
-void initConsole(float screenh){
+void initConsole(){
   debug ("Setting console default value");
   con.Sensitivity = 2000;
   con.Rgb = 1;
@@ -661,8 +987,8 @@ void initConsole(float screenh){
   con.RgbFrameY2 = 478;
   int i;
   for (i = 0; i < CONSOLE_MAX_ROWS; i++){
-      debug ("Row %d = %f", i, (i == 0 ? 1 : con.Rows[i - 1] + CONSOLE_ROWS_HEIGHT));
-      con.Rows[i] = (i == 10 ? 1 : con.Rows[i - 1] + CONSOLE_ROWS_HEIGHT);
+      debug ("Row %d = %f", i, con.Rows[i - 1] + CONSOLE_ROWS_HEIGHT);
+      con.Rows[i] = con.Rows[i - 1] + CONSOLE_ROWS_HEIGHT;
   }
   debug ("Done intializing console.");
   pushToOutBuffer ("Console is ready.");
@@ -687,68 +1013,8 @@ void updateConsole(){
   //OUTPUT
   int i;
   for (i = 0; i < CONSOLE_MAX_ROWS - 1; i++){
-    renderString (1270.0, con.Rows[i], 200, 0, 0, GLUT_BITMAP_HELVETICA_12, con.OutBuf[i]);
+    renderString (1270.0, con.Rows[i], 200, 0, 0, GLUT_BITMAP_8_BY_13, con.OutBuf[i]);
   }
-}
-
-void DrawGLScene()
-{
-  if (con.Rgb == 0 || con.Depth == 0){
-    pthread_mutex_lock(&gl_backbuf_mutex);
-
-    while (got_frames < 2) {
-      pthread_cond_wait(&gl_frame_cond, &gl_backbuf_mutex);
-    }
-
-
-    if (con.Depth == 0)
-      memcpy(gl_depth_front, gl_depth_back, sizeof(gl_depth_back));
-    if (con.Rgb == 0)
-      memcpy(gl_rgb_front, gl_rgb_back, sizeof(gl_rgb_back));
-    got_frames = 0;
-    pthread_mutex_unlock(&gl_backbuf_mutex);
-  }
-
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-  glLoadIdentity();
-
-  glEnable(GL_TEXTURE_2D);
-  glTranslated(1280, 0, 0);
-  glScalef(-1, 1, 1);
-
-
-  if (con.Depth == 0){
-    glBindTexture(GL_TEXTURE_2D, gl_depth_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, 3, 640, DrawGLSceneY, 0, GL_RGB, GL_UNSIGNED_BYTE, gl_depth_front);
-
-    glBegin(GL_TRIANGLE_FAN);
-    glColor4f(255.0f, 255.0f, 255.0f, 255.0f);
-    glTexCoord2f(0, 0); glVertex3f(con.DepthFrameX1,con.DepthFrameY1,0);
-    glTexCoord2f(1, 0); glVertex3f(con.DepthFrameX2,con.DepthFrameY1,0);
-    glTexCoord2f(1, 1); glVertex3f(con.DepthFrameX2,con.DepthFrameY2,0);
-    glTexCoord2f(0, 1); glVertex3f(con.DepthFrameX1,con.DepthFrameY2,0);
-    glEnd();
-  }
-
-  if (con.Rgb == 0){
-    glBindTexture(GL_TEXTURE_2D, gl_rgb_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, 3, 640, DrawGLSceneY, 0, GL_RGB, GL_UNSIGNED_BYTE, gl_rgb_front);
-
-    glBegin(GL_TRIANGLE_FAN);
-    glColor4f(255.0f, 255.0f, 255.0f, 255.0f);
-    glTexCoord2f(0, 0); glVertex3f(con.RgbFrameX1,con.RgbFrameY1,0);
-    glTexCoord2f(1, 0); glVertex3f(con.RgbFrameX2,con.RgbFrameY1,0);
-    glTexCoord2f(1, 1); glVertex3f(con.RgbFrameX2,con.RgbFrameY2,0);
-    glTexCoord2f(0, 1); glVertex3f(con.RgbFrameX1,con.RgbFrameY2,0);
-
-    glEnd();
-
-  }
-  // Disable texture to write text in console.
-  glDisable(GL_TEXTURE_2D);
-  updateConsole();
-  glutSwapBuffers();
-
 }
 
 void renderString(float x, float y, int r, int g, int b, void *font, const char* string){
@@ -860,6 +1126,66 @@ void keyPressed(unsigned char key, int x, int y)
   debug ("Attempting to free tmpBuf to prevent memory leaks, this may crash.");
   free (tmpBuf);
   pushToOutBuffer ("Looks like we did not.");
+}
+
+void DrawGLScene()
+{
+  if (con.Rgb == 0 || con.Depth == 0){
+    pthread_mutex_lock(&gl_backbuf_mutex);
+
+    while (got_frames < 2) {
+      pthread_cond_wait(&gl_frame_cond, &gl_backbuf_mutex);
+    }
+
+
+    if (con.Depth == 0)
+      memcpy(gl_depth_front, gl_depth_back, sizeof(gl_depth_back));
+    if (con.Rgb == 0)
+      memcpy(gl_rgb_front, gl_rgb_back, sizeof(gl_rgb_back));
+    got_frames = 0;
+    pthread_mutex_unlock(&gl_backbuf_mutex);
+  }
+
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  glLoadIdentity();
+
+  glEnable(GL_TEXTURE_2D);
+  glTranslated(1280, 0, 0);
+  glScalef(-1, 1, 1);
+
+
+  if (con.Depth == 0){
+    glBindTexture(GL_TEXTURE_2D, gl_depth_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, 3, 640, DrawGLSceneY, 0, GL_RGB, GL_UNSIGNED_BYTE, gl_depth_front);
+
+    glBegin(GL_TRIANGLE_FAN);
+    glColor4f(255.0f, 255.0f, 255.0f, 255.0f);
+    glTexCoord2f(0, 0); glVertex3f(con.DepthFrameX1,con.DepthFrameY1,0);
+    glTexCoord2f(1, 0); glVertex3f(con.DepthFrameX2,con.DepthFrameY1,0);
+    glTexCoord2f(1, 1); glVertex3f(con.DepthFrameX2,con.DepthFrameY2,0);
+    glTexCoord2f(0, 1); glVertex3f(con.DepthFrameX1,con.DepthFrameY2,0);
+    glEnd();
+  }
+
+  if (con.Rgb == 0){
+    glBindTexture(GL_TEXTURE_2D, gl_rgb_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, 3, 640, DrawGLSceneY, 0, GL_RGB, GL_UNSIGNED_BYTE, gl_rgb_front);
+
+    glBegin(GL_TRIANGLE_FAN);
+    glColor4f(255.0f, 255.0f, 255.0f, 255.0f);
+    glTexCoord2f(0, 0); glVertex3f(con.RgbFrameX1,con.RgbFrameY1,0);
+    glTexCoord2f(1, 0); glVertex3f(con.RgbFrameX2,con.RgbFrameY1,0);
+    glTexCoord2f(1, 1); glVertex3f(con.RgbFrameX2,con.RgbFrameY2,0);
+    glTexCoord2f(0, 1); glVertex3f(con.RgbFrameX1,con.RgbFrameY2,0);
+
+    glEnd();
+
+  }
+  // Disable texture to write text in console.
+  glDisable(GL_TEXTURE_2D);
+  updateConsole();
+  glutSwapBuffers();
+
 }
 
 void ReSizeGLScene(int Width, int Height)
@@ -1026,8 +1352,10 @@ void *freenect_threadfunc(void *arg)
 	check (freenect_set_led(f_dev,LED_GREEN) == 0, "Error setting led to green.");
 	freenect_set_depth_callback(f_dev, depth_cb);
 	freenect_set_video_callback(f_dev, rgb_cb);
-  debug("Video mode count: %d", freenect_get_video_mode_count());
-  debug("Commented out set video mode, I had bad results, need more research");
+
+  int vmCount =  freenect_get_video_mode_count();
+  debug("Video mode count: %d", vmCount);
+
   /*
     freenect_frame_mode myMode = freenect_get_video_mode(FREENECT_VIDEO_RGB);
     freenect_set_video_mode(f_dev, myMode);
@@ -1044,22 +1372,7 @@ void *freenect_threadfunc(void *arg)
 		//freenect_get_mks_accel(state, &dx, &dy, &dz);
 		//fflush(stdout);
 	}
-
-	debug("Shutting Down Streams...");
-  if (con.Depth == 0){
-    debug("Stopping depth stream.");
-    freenect_stop_depth(f_dev);
-  }
-  if (con.Rgb == 0){
-    debug("Stopping rgb stream.");
-    freenect_stop_video(f_dev);
-  }
-
-  debug("Closing device.");
-	freenect_close_device(f_dev);
-
-  debug("Shutting it down.");
-	freenect_shutdown(f_ctx);
+  closeKinect();
 
   debug("Free command buffer");
   free(con.Buf);
@@ -1075,7 +1388,7 @@ void *freenect_threadfunc(void *arg)
 int main(int argc, char **argv)
 {
   debug("Let's get started");
-	int res;
+
 
 	display = XOpenDisplay(0);
 
@@ -1102,31 +1415,14 @@ int main(int argc, char **argv)
 	g_argv = argv;
 
   debug ("Init console");
-  initConsole(480); //This var should not be hardcoded. Default should be given with choice of changing. I think
+  initConsole();
 
-  debug("Initializing Kinect");
-  check(freenect_init(&f_ctx, NULL) == 0," freenect_init failed");
-  freenect_angle = con.Angle;
-  debug("Set freenect log level %d", FREENECT_LOG_DEBUG);
-	freenect_set_log_level(f_ctx, FREENECT_LOG_DEBUG);
-
-	int nr_devices = freenect_num_devices (f_ctx);
-	debug ("Number of Devices Found: %d", nr_devices);
-
-	int user_device_number = 0;
-	if (argc > 1)
-		user_device_number = atoi(argv[1]);
-
-  check (nr_devices >= 1, "nr_devices is below 1.");
-
-  check (freenect_open_device(f_ctx, &f_dev, user_device_number) >= 0, "Could not locate Kinect");
-
-
-	res = pthread_create(&freenect_thread, NULL, freenect_threadfunc, NULL);
-  check (!res, "Could not create thread.");
+  myKinect.kinect_is_open = 1;
+  myKinect.freenect_is_init = 1;
+  myKinect.kinect_selected_devices_count = -1;
+  initFreenect();
 
 	gl_threadfunc(NULL);
-
 
 	return 0;
 

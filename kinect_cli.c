@@ -113,6 +113,11 @@ int ReSizeGLSceneY = 480;
 int gl_threadfunY1 = 480;
 int gl_threadfunY2 = 480;
 
+void runTest(){
+  debug ("Calling XnInit");
+  XnInit();
+}
+
 void listSelectedSubDevices(){
   if (myKinect.kinect_selected_devices_count == -1){
     pushToOutBuffer ("Getting selected Subdevices.");
@@ -905,6 +910,12 @@ void processCmd(){
   else if (strcmp(sections[0], "selectSubDevices") == 0){
     int flag = atoi(sections[1]);
     selectSubDevices(flag);
+  }
+
+  else if (strcmp(sections[0], "runtest") == 0){
+    pushToOutBuffer ("Calling test run.");
+    runTest();
+    pushToOutBuffer ("We Survived!!! :D");
   }
 
 

@@ -18,6 +18,8 @@
 
 #include <math.h>
 
+#include <XnCore.h>
+
 #include "dbg.h" // Debug macros
 
 #define SCREEN (DefaultScreen(display))
@@ -88,6 +90,10 @@ typedef struct connectedKinect{
 
 //// BEGIN FUNCTION DECLARATION
 
+/**
+ * Function to play with kinectSensor
+ */
+void runTest();
 /**
  * List selected (Called enabled by libFreenect) subdevices that will be open by any future call to freenect_open_devices.
  */

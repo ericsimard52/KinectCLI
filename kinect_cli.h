@@ -18,7 +18,7 @@
 
 #include <math.h>
 
-#include <XnCore.h>
+#include "Include/XnCore.h"
 
 #include "dbg.h" // Debug macros
 
